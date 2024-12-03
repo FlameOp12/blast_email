@@ -1,10 +1,10 @@
-import os
+import base64
 import logging
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from typing import List, Optional
+from typing import List
 
 from app.email_utils import send_email
 from app.email_schema import EmailRequest, EmailAttachment
@@ -18,10 +18,10 @@ app = FastAPI(title="Advanced Email Sending API")
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Rate limiting
@@ -36,20 +36,21 @@ async def send_email_endpoint(
     background_tasks: BackgroundTasks
 ):
     """
-    Send emails with advanced features:
-    - Multiple recipients
-    - File attachments
-    - Embedded links
-    - CC and BCC support
+    Endpoint to send emails.
     """
     try:
-        # Validate recipients
         if not email_data.recipients:
             raise HTTPException(status_code=400, detail="At least one recipient is required")
 
-        # Add task to background
+        if email_data.attachments:
+            for attachment in email_data.attachments:
+                try:
+                    base64.b64decode(attachment.content)  # Validate base64 encoding
+                except Exception:
+                    raise HTTPException(status_code=400, detail=f"Invalid base64 content in attachment: {attachment.filename}")
+
         background_tasks.add_task(
-            send_email, 
+            send_email,
             subject=email_data.subject,
             body=email_data.body,
             recipients=email_data.recipients,
@@ -63,29 +64,28 @@ async def send_email_endpoint(
             "message": f"Email is being sent to {len(email_data.recipients)} recipients",
             "recipients_count": len(email_data.recipients)
         }
-    
+
     except Exception as e:
-        logger.error(f"Email sending error: {e}")
+        logger.error(f"Error while sending email: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/upload-attachments/")
 async def upload_attachments(files: List[UploadFile] = File(...)):
     """
-    Endpoint to upload attachments before sending email
-    Supports multiple file uploads
+    Endpoint to upload attachments.
     """
     attachments = []
     for file in files:
-        # Read file content
         content = await file.read()
-        
+        encoded_content = base64.b64encode(content).decode('utf-8')
+
         attachment = EmailAttachment(
             filename=file.filename,
-            content=content,
+            content=encoded_content,
             mime_type=file.content_type or 'application/octet-stream'
         )
         attachments.append(attachment)
-    
+
     return {
         "message": f"Successfully uploaded {len(attachments)} files",
         "attachments": [{"filename": a.filename, "mime_type": a.mime_type} for a in attachments]
